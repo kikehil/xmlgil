@@ -1,0 +1,7 @@
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" Fecha="2023-10-01T12:00:00" SubTotal="1293.10" Total="1500.00" TipoDeComprobante="I" MetodoPago="PUE" Version="4.0">
+    <cfdi:Emisor Nombre="EMPRESA PRUEBA S.A." Rfc="EKU9003173C9" />
+    <cfdi:Receptor Nombre="CLIENTE EJEMPLO" Rfc="XAXX010101000" />
+    <cfdi:Complemento>
+        <tfd:TimbreFiscalDigital UUID="550e8400-e29b-41d4-a716-446655440000" />
+    </cfdi:Complemento>
+</cfdi:Comprobante>

@@ -1,0 +1,10 @@
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:pago20="http://www.sat.gob.mx/Pagos20" xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" Fecha="2023-10-05T10:30:00" SubTotal="0" Total="0.00" TipoDeComprobante="P" Version="4.0">
+    <cfdi:Emisor Nombre="PROVEEDOR SERVICIOS" Rfc="PRO123456789" />
+    <cfdi:Receptor Nombre="MI EMPRESA" />
+    <cfdi:Complemento>
+        <pago20:Pagos>
+            <pago20:Pago Monto="2500.00" />
+        </pago20:Pagos>
+        <tfd:TimbreFiscalDigital UUID="999e8400-e29b-41d4-a716-446655449999" />
+    </cfdi:Complemento>
+</cfdi:Comprobante>
