@@ -19,38 +19,65 @@ def procesar_xml(archivo):
         xml_data = archivo.read()
         root = ET.fromstring(xml_data)
 
-        # 1. UUID (Folio Fiscal)
+        # 1. Datos de Identificación y Encabezado
         tfd = root.find('.//tfd:TimbreFiscalDigital', ns)
         uuid = tfd.attrib.get('UUID', 'N/A') if tfd is not None else "N/A"
-        
         if uuid == "N/A":
             return None
 
-        # 2. Datos Generales
+        emisor_nodo = root.find('cfdi:Emisor', ns)
+        receptor_nodo = root.find('cfdi:Receptor', ns)
+
+        rfc_emisor = emisor_nodo.attrib.get('Rfc', 'N/A') if emisor_nodo is not None else "N/A"
+        nombre_emisor = emisor_nodo.attrib.get('Nombre', 'N/A') if emisor_nodo is not None else "N/A"
+        uso_cfdi = receptor_nodo.attrib.get('UsoCFDI', 'N/A') if receptor_nodo is not None else "N/A"
+
+        # 2. Tipo de comprobante y totales (incluyendo soporte para Pagos 2.0)
         tipo_letra = root.attrib.get('TipoDeComprobante', 'I')
         nombres_tipo = {'I': 'Ingreso', 'E': 'Egreso', 'P': 'Pago', 'N': 'Nómina', 'T': 'Traslado'}
         tipo_desc = nombres_tipo.get(tipo_letra, 'Otro')
 
-        # 3. Lógica de montos (Soporte para Pagos 2.0)
+        subtotal = float(root.attrib.get('SubTotal', 0))
         total = float(root.attrib.get('Total', 0))
         if tipo_letra == 'P':
             pago_nodo = root.find('.//pago20:Pago', ns)
             if pago_nodo is not None:
                 total = float(pago_nodo.attrib.get('Monto', 0))
 
-        # 4. Datos de Identidad
-        emisor = root.find('cfdi:Emisor', ns)
-        nombre_emisor = emisor.attrib.get('Nombre', 'N/A') if emisor is not None else "N/A"
+        # 3. Extracción de Impuestos (Traslados y Retenciones)
+        iva_trasladado = 0.0
+        isr_retenido = 0.0
+
+        impuestos_global = root.find('cfdi:Impuestos', ns)
+        if impuestos_global is not None:
+            # IVA Trasladado (Impuesto 002)
+            traslados = impuestos_global.find('cfdi:Traslados', ns)
+            if traslados is not None:
+                for t in traslados.findall('cfdi:Traslado', ns):
+                    if t.attrib.get('Impuesto') == '002':
+                        iva_trasladado += float(t.attrib.get('Importe', 0))
+
+            # ISR Retenido (Impuesto 001)
+            retenciones = impuestos_global.find('cfdi:Retenciones', ns)
+            if retenciones is not None:
+                for r in retenciones.findall('cfdi:Retencion', ns):
+                    if r.attrib.get('Impuesto') == '001':
+                        isr_retenido += float(r.attrib.get('Importe', 0))
 
         return {
             "Fecha": root.attrib.get('Fecha', 'N/A')[:10],
             "Tipo": tipo_desc,
+            "RFC Emisor": rfc_emisor,
             "Emisor": nombre_emisor,
+            "Uso CFDI": uso_cfdi,
+            "Subtotal": subtotal,
+            "IVA (16%)": iva_trasladado,
+            "ISR Retenido": isr_retenido,
             "Total": total,
             "UUID": uuid,
             "Archivo": archivo.name
         }
-    except Exception as e:
+    except Exception:
         return None
 
 # --- INTERFAZ DE USUARIO ---
