@@ -15,6 +15,8 @@ ns = {
 
 def procesar_xml(archivo):
     try:
+        # Volver al inicio del archivo si ya se leyó
+        archivo.seek(0)
         xml_data = archivo.read()
         root = ET.fromstring(xml_data)
 
@@ -27,8 +29,11 @@ def procesar_xml(archivo):
         serie = root.attrib.get('Serie', '')
         metodo_pago = root.attrib.get('MetodoPago', 'N/A')
         forma_pago = root.attrib.get('FormaPago', 'N/A')
-        no_certificado = root.attrib.get('NoCertificado', 'N/A')
         fecha = root.attrib.get('Fecha', 'N/A')[:10]
+        
+        tipo_letra = root.attrib.get('TipoDeComprobante', 'I')
+        nombres_tipo = {'I': 'Ingreso', 'E': 'Egreso', 'P': 'Pago', 'N': 'Nómina', 'T': 'Traslado'}
+        tipo_desc = nombres_tipo.get(tipo_letra, 'Otros')
 
         # --- Emisor y Receptor ---
         emisor = root.find('cfdi:Emisor', ns)
@@ -41,51 +46,73 @@ def procesar_xml(archivo):
         nom_receptor = receptor.attrib.get('Nombre', 'N/A') if receptor is not None else "N/A"
         uso_cfdi = receptor.attrib.get('UsoCFDI', 'N/A') if receptor is not None else "N/A"
 
-        # --- Importes y Totales ---
-        subtotal = float(root.attrib.get('SubTotal', 0))
+        # --- Importes ---
         total = float(root.attrib.get('Total', 0))
 
-        # --- Impuestos (Traslados y Retenciones) ---
-        iva_trasladado = 0.0
-        impuestos_retenidos = 0.0
-        
-        impuestos_global = root.find('cfdi:Impuestos', ns)
-        if impuestos_global is not None:
-            # Sumar todos los traslados (IVA, IEPS)
-            traslados = impuestos_global.find('cfdi:Traslados', ns)
-            if traslados is not None:
-                for t in traslados.findall('cfdi:Traslado', ns):
-                    iva_trasladado += float(t.attrib.get('Importe', 0))
-            
-            # Sumar todas las retenciones (ISR, IVA Retenido)
-            retenciones = impuestos_global.find('cfdi:Retenciones', ns)
-            if retenciones is not None:
-                for r in retenciones.findall('cfdi:Retencion', ns):
-                    impuestos_retenidos += float(r.attrib.get('Importe', 0))
+        # Caso especial para Pagos (Complemento de Recepción de Pagos)
+        if tipo_letra == 'P':
+            pago_nodo = root.find('.//pago20:Pago', ns)
+            if pago_nodo is not None:
+                total = float(pago_nodo.attrib.get('Monto', 0))
+
+        # --- Lógica de Alerta Fiscal ---
+        alerta_fiscal = "✅ Deducible"
+        if tipo_desc == 'Ingreso':
+            if forma_pago == '01' and total > 2000:
+                alerta_fiscal = "❌ Efectivo > $2k"
+            elif uso_cfdi in ['S01', 'CP01']:
+                alerta_fiscal = "❌ Sin Efectos Fiscales"
+        elif tipo_desc in ['Pago', 'Nómina']:
+            alerta_fiscal = "✅ Informativo"
 
         return {
+            "Fecha": fecha,
+            "Tipo": tipo_desc,
             "Rfc Emisor": rfc_emisor,
             "Nombre Emisor": nom_emisor,
             "Rfc Receptor": rfc_receptor,
             "Nombre Receptor": nom_receptor,
             "UsoCFDI": uso_cfdi,
-            "Folio": f"{serie}{folio}",
-            "NoCertificado": no_certificado,
             "MetodoPago": metodo_pago,
             "FormaPago": forma_pago,
-            "SUBTOTAL": subtotal,
-            "IMPUESTOS TRASLADADOS": iva_trasladado,
-            "IMPUESTOS RETENIDOS": impuestos_retenidos,
-            "TOTAL": total,
-            "Fecha": fecha,
-            "UUID": uuid
+            "Total": total,
+            "Alerta Fiscal": alerta_fiscal,
+            "UUID": uuid,
+            "Folio": f"{serie}{folio}"
         }
     except Exception as e:
         return None
 
-# --- INTERFAZ DE USUARIO ---
-st.title("📊 Extractor Contable Inteligente")
-st.markdown("Sube tus archivos XML para generar el reporte mensual automáticamente.")
+# Función para generar el Excel con 5 pestañas
+def generar_excel_contable(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        # 1. Hoja BASE (Todos los registros)
+        df.to_excel(writer, sheet_name='BASE', index=False)
+        
+        # 2. Hoja NOMINA (Tipo Nómina)
+        df[df['Tipo'] == 'Nómina'].to_excel(writer, sheet_name='NOMINA', index=False)
+        
+        # 3. Hoja COMPLEMENTO DE PAGO (Tipo Pago)
+        df[df['Tipo'] == 'Pago'].to_excel(writer, sheet_name='COMPLEMENTO_PAGO', index=False)
+        
+        # 4. Hoja DEDUCIBLES
+        # Filtro: No es nómina, no es pago, y cumple regla de efectivo o uso deducible
+        deducibles = df[
+            (df['Tipo'] == 'Ingreso') & 
+            (df['Alerta Fiscal'].str.contains('✅'))
+        ]
+        deducibles.to_excel(writer, sheet_name='DEDUCIBLES', index=False)
+        
+        # 5. Hoja NO DEDUCIBLES
+        no_deducibles = df[df['Alerta Fiscal'].str.contains('❌')]
+        no_deducibles.to_excel(writer, sheet_name='NO_DEDUCIBLES', index=False)
+        
+    return output.getvalue()
+
+# --- INTERFAZ STREAMLIT ---
+st.title("📂 Sistema Contable Multi-Hoja")
+st.markdown("Sube tus archivos XML para generar el reporte contable avanzado.")
 
 uploaded_files = st.file_uploader("Arrastra aquí tus archivos XML", type="xml", accept_multiple_files=True)
 
@@ -94,7 +121,6 @@ if uploaded_files:
     uuids_vistos = set()
     duplicados = 0
 
-    # Procesar archivos
     for file in uploaded_files:
         resultado = procesar_xml(file)
         if resultado:
@@ -107,25 +133,41 @@ if uploaded_files:
     if datos_lista:
         df = pd.DataFrame(datos_lista)
 
-        # Resumen métrico
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Facturas", len(df))
-        col2.metric("Suma Total ($)", f"{df['TOTAL'].sum():,.2f}")
-        col3.metric("Duplicados Ignorados", duplicados)
+        # --- TARJETAS DE TOTALES ---
+        st.subheader("📊 Resumen por Concepto")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        
+        with c1: st.metric("General", f"${df['Total'].sum():,.2f}")
+        with c2: 
+            total_nom = df[df['Tipo'] == 'Nómina']['Total'].sum()
+            st.metric("Nómina", f"${total_nom:,.2f}")
+        with c3:
+            total_pago = df[df['Tipo'] == 'Pago']['Total'].sum()
+            st.metric("Pagos", f"${total_pago:,.2f}")
+        with c4:
+            total_ded = df[(df['Tipo'] == 'Ingreso') & (df['Alerta Fiscal'].str.contains('✅'))]['Total'].sum()
+            st.metric("Deducible", f"${total_ded:,.2f}")
+        with c5:
+            total_noded = df[df['Alerta Fiscal'].str.contains('❌')]['Total'].sum()
+            st.metric("No Deducible", f"${total_noded:,.2f}", delta_color="inverse")
 
-        # Tabla de datos
-        st.subheader("Detalle de Comprobantes")
+        # --- TABLA DE DATOS ---
+        st.subheader("📋 Vista Previa de Documentos")
         st.dataframe(df, use_container_width=True)
 
-        # Botón de descarga
-        csv = df.to_csv(index=False).encode('utf-8')
+        # --- BOTÓN DE DESCARGA ---
+        st.divider()
+        excel_data = generar_excel_contable(df)
         st.download_button(
-            label="📥 Descargar Reporte para Excel",
-            data=csv,
-            file_name="reporte_contable.csv",
-            mime="text/csv",
+            label="📥 Descargar Libro Contable (5 Hojas)",
+            data=excel_data,
+            file_name="Auditoria_Contable.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+        
+        if duplicados > 0:
+            st.warning(f"Se omitieron {duplicados} archivos duplicados.")
     else:
         st.error("No se pudo extraer información válida de los archivos subidos.")
 else:
-    st.info("💡 Sube tus archivos XML para visualizar el reporte.")
+    st.info("💡 Sube tus archivos XML para comenzar el análisis contable.")
